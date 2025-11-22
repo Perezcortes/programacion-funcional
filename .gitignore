@@ -13,3 +13,6 @@ physics_engine/movement_binary
 .DS_Store
 .vscode/
 .idea/
+
+# --- Entornos virtuales ---
+.venv/
