@@ -1,0 +1,15 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+venv/
+
+# --- Haskell ---
+*.hi
+*.o
+*.exe
+physics_engine/movement_binary
+
+# --- Configuración local ---
+.DS_Store
+.vscode/
+.idea/
