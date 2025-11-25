@@ -159,7 +159,7 @@ snd_alert = load_asset(os.path.join("sounds", "alert.wav"), 'sound')
 snd_shoot = None
 
 # --- MOTORES EXTERNOS ---
-haskell_exe = os.path.join("physics_engine", "movement_binary.exe")
+haskell_exe = os.path.join("physics_engine", "movement_binary") # Cambiar a ovement_binary.exe en Windows
 if not os.path.exists(haskell_exe): 
     print(f"Error: Falta binario Haskell en {haskell_exe}")
     print("Compilalo con: cd physics_engine && ghc -O2 --make Movement.hs -o movement_binary.exe")
