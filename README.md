@@ -103,12 +103,13 @@ Conecta el Joystick analógico (KY-023) a la Raspberry Pi Pico usando la siguien
 
 ## ⚠️ IMPORTANTE: Conecta la alimentación al pin 3V3, NO a 5V.
 
-Pin Joystick,Pin Raspberry Pi Pico,Función
-GND,GND (Pin 38),Tierra
-+5V,3V3(OUT) (Pin 36),Energía (3.3V)
-VRx,GP26 (Pin 31),Eje X
-VRy,GP27 (Pin 32),Eje Y
-SW,GP15 (Pin 20),Botón
+| Pin Joystick | Pin Raspberry Pi Pico       | Función        |
+|--------------|-----------------------------|----------------|
+| GND          | GND (Pin 38)                | Tierra         |
+| +5V          | 3V3(OUT) (Pin 36)           | Energía (3.3V) |
+| VRx          | GP26 (Pin 31)               | Eje X          |
+| VRy          | GP27 (Pin 32)               | Eje Y          |
+| SW           | GP15 (Pin 20)               | Botón          |
 
 **2. Instalación de MicroPython (Firmware)**
 ``` bash
