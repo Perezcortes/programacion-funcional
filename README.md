@@ -132,7 +132,7 @@ Abre Thonny IDE.
 
 En la esquina inferior derecha, selecciona el intérprete: "MicroPython (Raspberry Pi Pico)".
 
-Copia el código que esta en Raspberri\main.py en el editor
+Copia el código que esta en Raspberry\main.py en el editor
 
 Ve a Archivo > Guardar como...
 
