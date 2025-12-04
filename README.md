@@ -92,6 +92,55 @@ pip install -r requirements.txt
 ghc -O2 --make physics_engine/Movement.hs -o physics_engine/movement_binary
 ```
 
+## Configuración del Hardware (Raspberry Pi Pico + Joystick)
+
+Si deseas usar el control físico personalizado, sigue estos pasos:
+
+**1. Conexión de Cables (Wiring)**
+``` bash
+Conecta el Joystick analógico (KY-023) a la Raspberry Pi Pico usando la siguiente tabla.
+```
+
+## ⚠️ IMPORTANTE: Conecta la alimentación al pin 3V3, NO a 5V.
+
+Pin Joystick,Pin Raspberry Pi Pico,Función
+GND,GND (Pin 38),Tierra
++5V,3V3(OUT) (Pin 36),Energía (3.3V)
+VRx,GP26 (Pin 31),Eje X
+VRy,GP27 (Pin 32),Eje Y
+SW,GP15 (Pin 20),Botón
+
+**2. Instalación de MicroPython (Firmware)**
+``` bash
+Desconecta la Raspberry Pi Pico de tu ordenador.
+
+Mantén presionado el botón blanco BOOTSEL en la Pico.
+
+Mientras mantienes el botón, conéctala al USB.
+
+Aparecerá una unidad de almacenamiento llamada RPI-RP2 en tu PC.
+
+Arrastra y suelta el archivo RPI_PICO_W-20241129-v1.24.1.uf2 dentro de esa unidad.
+
+La Pico se reiniciará automáticamente y estará lista.
+```
+
+**3. Cargar el Código con Thonny**
+``` bash
+Abre Thonny IDE.
+
+En la esquina inferior derecha, selecciona el intérprete: "MicroPython (Raspberry Pi Pico)".
+
+Copia el código que esta en Raspberri\main.py en el editor
+
+Ve a Archivo > Guardar como...
+
+Selecciona Raspberry Pi Pico.
+
+Guarda el archivo con el nombre exacto: main.py.
+```
+## ⚠️ MUY IMPORTANTE: Cierra Thonny antes de ejecutar el juego, o el puerto USB estará ocupado.
+
 ------------------------------------------------------------------------
 
 ## 🚀 Ejecución

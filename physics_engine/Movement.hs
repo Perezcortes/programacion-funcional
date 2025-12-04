@@ -156,7 +156,7 @@ main = do
     hSetBuffering stderr NoBuffering
     
     -- Mensaje de inicio para debugging
-    hPutStrLn stderr "Haskell Physics Engine Started ✓"
+    hPutStrLn stderr "Haskell Physics Engine Started OK"
     
     loop defaultConfig
 
@@ -174,10 +174,10 @@ loop config = do
                     
                     -- Debug: advertir si va a colisionar
                     when (willCollideWithBounds config newState 10) $
-                        hPutStrLn stderr "⚠️ Warning: Collision predicted in 10 frames"
+                        hPutStrLn stderr "[WARN] Warning: Collision predicted in 10 frames"
                     
                 Nothing -> do
-                    hPutStrLn stderr $ "⚠️ Parse error: " ++ line
+                    hPutStrLn stderr $ "[ERR] Parse error: " ++ line
                     putStrLn (formatError "Invalid input format")
             
             loop config

@@ -5,6 +5,8 @@ import json
 import os
 import math
 import random
+import serial
+import serial.tools.list_ports
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -20,7 +22,7 @@ except pygame.error:
 
 WIDTH, HEIGHT = 800, 600
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("WW2 Dogfight: Ultimate Edition")
+pygame.display.set_caption("WW2 Dogfight: Pico Ultimate Edition")
 clock = pygame.time.Clock()
 
 # Colores
@@ -30,6 +32,7 @@ GREEN = (50, 255, 50)
 YELLOW = (255, 255, 0)
 RED = (255, 50, 50)
 ORANGE = (255, 150, 0)
+GOLD = (255, 215, 0)
 DARK_OVERLAY = (0, 0, 0, 180)
 
 # Fuentes
@@ -37,6 +40,93 @@ font_title = pygame.font.SysFont("Stencil", 50, bold=True)
 font_sub = pygame.font.SysFont("Consolas", 20)
 font_info = pygame.font.SysFont("Arial", 16)
 font_hud = pygame.font.SysFont("Arial", 18, bold=True)
+font_big = pygame.font.SysFont("Arial", 36, bold=True)
+
+# --- CLASE PARA LEER LA PICO (SERIAL) ---
+class PicoController:
+    def __init__(self):
+        self.ser = None
+        self.x = 0.0 # -1.0 a 1.0
+        self.y = 0.0 # -1.0 a 1.0
+        self.btn = False
+        self.btn_pressed = False  # Para detectar cuando se presiona, no mantener
+        self.connected = False
+        self.port_name = ""
+        self.raw_data = "" # Para debugging visual
+        self.prev_btn = False  # Para detectar flanco de subida
+        self.connect()
+
+    def connect(self):
+        ports = list(serial.tools.list_ports.comports())
+        for p in ports:
+            if "COM1" in p.device:
+                continue
+            if "USB" in p.description or "Serial" in p.description:
+                try:
+                    self.ser = serial.Serial(p.device, 115200, timeout=0.01)
+                    self.port_name = p.device
+                    self.connected = True
+                    print(f"✅ Pico conectada en {self.port_name}")
+                    return
+                except:
+                    pass
+        print("⚠️ Pico no encontrada (Usando modo Teclado).")
+
+    def update(self):
+        # Resetear btn_pressed cada frame
+        self.btn_pressed = False
+        
+        if not self.ser or not self.ser.is_open: 
+            self.x, self.y, self.btn = 0, 0, False
+            return
+
+        try:
+            if self.ser.in_waiting > 0:
+                content = self.ser.read(self.ser.in_waiting).decode('utf-8', errors='ignore')
+                lines = content.split('\n')
+                
+                for line in reversed(lines):
+                    line = line.strip()
+                    if not line: continue
+                    self.raw_data = line
+                    
+                    parts = line.split(',')
+                    if len(parts) == 3:
+                        try:
+                            raw_x = int(parts[0])
+                            raw_y = int(parts[1])
+                            raw_btn = int(parts[2])
+
+                            # --- LÓGICA ANALÓGICA PARA AVIONES (SUAVE) ---
+                            # Normalizar (-1.0 a 1.0)
+                            norm_x = (raw_x - 32768) / 32768.0
+                            norm_y = (raw_y - 32768) / 32768.0
+                            
+                            # Zona muerta pequeña para evitar drift
+                            if abs(norm_x) < 0.1: norm_x = 0
+                            if abs(norm_y) < 0.1: norm_y = 0
+                            
+                            # Curva de respuesta suave (no snap digital)
+                            self.x = norm_x * abs(norm_x)  # Respuesta cuadrática
+                            self.y = norm_y * abs(norm_y)  # Más control en movimientos pequeños
+                            
+                            # Botón con detección de flanco
+                            current_btn = (raw_btn == 0)
+                            if current_btn and not self.prev_btn:
+                                self.btn_pressed = True
+                            self.btn = current_btn
+                            self.prev_btn = current_btn
+                            break 
+                        except ValueError:
+                            continue
+        except Exception:
+            self.connected = False
+            try: 
+                self.ser.close()
+            except: 
+                pass
+
+pico_ctrl = PicoController()
 
 # --- SISTEMA DE PARTÍCULAS ---
 @dataclass
@@ -111,7 +201,7 @@ class Bullet:
         color = YELLOW if self.owner == "player" else RED
         pygame.draw.circle(screen, color, (int(self.x), int(self.y)), 3)
         pygame.draw.line(screen, color, (int(self.x), int(self.y)), 
-                        (int(self.x - self.vx), int(self.y - self.vy)), 2)
+                         (int(self.x - self.vx), int(self.y - self.vy)), 2)
 
 def check_collision(bullet: Bullet, target: dict) -> bool:
     dx = bullet.x - target['x']
@@ -123,7 +213,6 @@ def check_collision(bullet: Bullet, target: dict) -> bool:
 def load_asset(path, type='image'):
     full_path = os.path.join("assets", path)
     if not os.path.exists(full_path):
-        print(f"FALTA ASSET: {full_path}")
         if type == 'image': 
             surf = pygame.Surface((64, 64))
             surf.fill((100, 100, 100))
@@ -134,17 +223,12 @@ def load_asset(path, type='image'):
         elif type == 'sound': return pygame.mixer.Sound(full_path)
     except Exception as e:
         print(f"Error cargando {full_path}: {e}")
-        if type == 'image': 
-            surf = pygame.Surface((64, 64))
-            surf.fill((100, 100, 100))
-            return surf.convert_alpha()
         return None
 
-# Fondo
+# Assets
 bg_raw = load_asset(os.path.join("sprites", "background.jpg"), 'image')
 bg_image = pygame.transform.scale(bg_raw, (WIDTH, HEIGHT))
 
-# Sprites
 player_raw = load_asset(os.path.join("sprites", "player.png"), 'image')
 enemy_raw = load_asset(os.path.join("sprites", "enemy.png"), 'image')
 player_scaled = pygame.transform.scale(player_raw, (64, 64))
@@ -152,17 +236,21 @@ enemy_scaled = pygame.transform.scale(enemy_raw, (64, 64))
 player_sprite = pygame.transform.rotate(player_scaled, -90)
 enemy_sprite = pygame.transform.rotate(enemy_scaled, 90)
 
-# Sonidos
 snd_engine = load_asset(os.path.join("sounds", "engine_loop.wav"), 'sound')
 if snd_engine: snd_engine.set_volume(0.3)
 snd_alert = load_asset(os.path.join("sounds", "alert.wav"), 'sound')
-snd_shoot = None
+snd_shoot = load_asset(os.path.join("sounds", "shoot.wav"), 'sound')
+snd_explosion = load_asset(os.path.join("sounds", "explosion.wav"), 'sound')
+snd_victory = load_asset(os.path.join("sounds", "victory.wav"), 'sound')
 
 # --- MOTORES EXTERNOS ---
-haskell_exe = os.path.join("physics_engine", "movement_binary.exe") # Cambiar a ovement_binary.exe en Windows
+if os.name == 'nt':
+    haskell_exe = os.path.join("physics_engine", "movement_binary.exe")
+else:
+    haskell_exe = os.path.join("physics_engine", "movement_binary")
+
 if not os.path.exists(haskell_exe): 
     print(f"Error: Falta binario Haskell en {haskell_exe}")
-    print("Compilalo con: cd physics_engine && ghc -O2 --make Movement.hs -o movement_binary.exe")
     sys.exit(1)
 
 try:
@@ -207,7 +295,6 @@ def draw_radar(surface, player, enemies, x, y, size):
     pygame.draw.circle(radar_surf, (0, 50, 0, 150), (size//2, size//2), size//2)
     pygame.draw.circle(radar_surf, GREEN, (size//2, size//2), size//2, 2)
     pygame.draw.circle(radar_surf, YELLOW, (size//2, size//2), 4)
-    
     scale = size / (WIDTH * 1.5)
     for enemy in enemies:
         if enemy.get('health', 0) > 0:
@@ -217,7 +304,6 @@ def draw_radar(surface, player, enemies, x, y, size):
             radar_y = int(size//2 + rel_y)
             if 0 <= radar_x < size and 0 <= radar_y < size:
                 pygame.draw.circle(radar_surf, RED, (radar_x, radar_y), 3)
-    
     surface.blit(radar_surf, (x, y))
 
 def ask_haskell(state, rot, thrust):
@@ -227,7 +313,6 @@ def ask_haskell(state, rot, thrust):
         proc_hs.stdin.flush()
         response = proc_hs.stdout.readline()
         result = json.loads(response)
-        # Mantener campos que no vienen de Haskell
         return {
             'x': result['x'],
             'y': result['y'],
@@ -236,8 +321,7 @@ def ask_haskell(state, rot, thrust):
             'health': state.get('health', 100),
             'max_health': state.get('max_health', 100)
         }
-    except Exception as e:
-        print(f"Error Haskell: {e}")
+    except: 
         return state
 
 def ask_prolog(ex, ey, px, py, time_step):
@@ -246,46 +330,24 @@ def ask_prolog(ex, ey, px, py, time_step):
         proc_pl.stdin.flush()
         line = proc_pl.stdout.readline()
         return json.loads(line) if line else {"action": "WAIT", "message": "..."}
-    except Exception as e:
+    except: 
         return {"action": "PATRULLAR", "message": "..."}
 
-# --- FUNCIÓN DE RESET DEL JUEGO ---
+# --- RESET DEL JUEGO ---
 def reset_game():
-    """Reinicia todas las variables del juego"""
-    player = {
-        "x": 200.0, 
-        "y": 300.0, 
-        "angle": 0.0, 
-        "speed": 0.0, 
-        "health": 100, 
-        "max_health": 100
-    }
-    enemies = [{
-        "x": 600.0, 
-        "y": 300.0, 
-        "action": "PATRULLAR", 
-        "msg": "...", 
-        "angle": 180.0, 
-        "health": 100, 
-        "max_health": 100, 
-        "shoot_cooldown": 0
-    }]
-    bullets = []
-    particles = []
-    score = 0
-    player_shoot_cooldown = 0
-    game_over = False
-    victory = False
-    
-    return player, enemies, bullets, particles, score, player_shoot_cooldown, game_over, victory
+    player = {"x": 200.0, "y": 300.0, "angle": 0.0, "speed": 0.0, "health": 100, "max_health": 100}
+    enemies = [{"x": 600.0, "y": 300.0, "action": "PATRULLAR", "msg": "...", "angle": 180.0, "health": 100, "max_health": 100, "shoot_cooldown": 0}]
+    return player, enemies, [], [], 0, 0, False, False, False, False
 
-# --- INICIALIZACIÓN DE VARIABLES ---
+# --- VARIABLES ---
 game_state = "MENU"
-player, enemies, bullets, particles, score, player_shoot_cooldown, game_over, victory = reset_game()
+player, enemies, bullets, particles, score, player_shoot_cooldown, game_over, victory, enemy_destroyed, player_destroyed = reset_game()
 time_step = 0
 blink_timer = 0
 bg_y = 0
 screen_shake = 0
+waiting_for_start = True  # Variable para controlar si esperamos inicio
+game_over_display_timer = 0  # Para mostrar mensajes de game over
 
 # --- BUCLE PRINCIPAL ---
 running = True
@@ -295,243 +357,369 @@ while running:
     dt = clock.tick(60) / 1000.0
     time_step += 1
     
-    # Detección dinámica de joystick
+    # 1. Leer Pico
+    pico_ctrl.update()
+
+    # 2. Joystick USB (Backup)
     if pygame.joystick.get_count() > 0 and joystick is None:
         joystick = pygame.joystick.Joystick(0)
         joystick.init()
     elif pygame.joystick.get_count() == 0:
         joystick = None
 
-    # Eventos
+    # 3. Eventos
+    start_game = False
     for event in pygame.event.get():
         if event.type == pygame.QUIT: 
             running = False
         
         if game_state == "MENU":
-            start_game = False
             if event.type == pygame.KEYDOWN:
-                if event.key in [pygame.K_SPACE, pygame.K_RETURN]: start_game = True
-            if event.type == pygame.JOYBUTTONDOWN: start_game = True
-            
-            if start_game:
-                game_state = "PLAYING"
-                if snd_engine: snd_engine.play(-1)
-                player, enemies, bullets, particles, score, player_shoot_cooldown, game_over, victory = reset_game()
+                if event.key in [pygame.K_SPACE, pygame.K_RETURN]: 
+                    start_game = True
+            if event.type == pygame.JOYBUTTONDOWN: 
+                start_game = True
+            if pico_ctrl.btn_pressed: 
+                start_game = True
         
         elif game_state == "GAME_OVER":
-            if event.type == pygame.KEYDOWN or event.type == pygame.JOYBUTTONDOWN:
+            if event.type == pygame.KEYDOWN or event.type == pygame.JOYBUTTONDOWN or pico_ctrl.btn_pressed:
                 game_state = "MENU"
+                waiting_for_start = True
+                game_over_display_timer = 0
+                enemy_destroyed = False
+                player_destroyed = False
 
-    # RENDERIZADO DE FONDO
+    # 4. Manejo de inicio del juego
+    if game_state == "MENU" and start_game:
+        game_state = "PLAYING"
+        waiting_for_start = False
+        if snd_engine: 
+            snd_engine.play(-1)
+        player, enemies, bullets, particles, score, player_shoot_cooldown, game_over, victory, enemy_destroyed, player_destroyed = reset_game()
+
+    # 5. Renderizado Fondo
     screen.blit(bg_image, (0, 0))
 
-    # ==========================================
-    # ESTADO: MENÚ
-    # ==========================================
     if game_state == "MENU":
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         overlay.fill(DARK_OVERLAY)
         screen.blit(overlay, (0,0))
-
         draw_text_centered(screen, "WW2 FUNCTIONAL DOGFIGHT", font_title, WHITE, -150)
-        draw_text_centered(screen, "EXPERIENCIA RECOMENDADA CON AUDÍFONOS", font_sub, (100, 200, 255), -80)
-
+        
         blink_timer += 1
         color_pulse = GREEN if (blink_timer // 30) % 2 == 0 else (100, 255, 100)
         
-        if joystick:
-            name = joystick.get_name()[:20]
+        if pico_ctrl.connected:
+            pygame.draw.rect(screen, GREEN, (WIDTH//2 - 150, HEIGHT//2 - 20, 300, 40), 2, border_radius=10)
+            draw_text_centered(screen, f"HARDWARE: PICO EN {pico_ctrl.port_name}", font_info, color_pulse, 0)
+            draw_text_centered(screen, "Presiona BOTÓN del joystick para Jugar", font_sub, WHITE, 40)
+            
+        elif joystick:
+            name = joystick.get_name()[:15]
             pygame.draw.rect(screen, GREEN, (WIDTH//2 - 150, HEIGHT//2 - 20, 300, 40), 2, border_radius=10)
             draw_text_centered(screen, f"JOYSTICK: {name}", font_info, color_pulse, 0)
-            draw_text_centered(screen, "Presiona [CUALQUIER BOTÓN] para Despegar", font_sub, WHITE, 40)
+            draw_text_centered(screen, "Presiona [BOTÓN] para Jugar", font_sub, WHITE, 40)
         else:
             pygame.draw.rect(screen, YELLOW, (WIDTH//2 - 150, HEIGHT//2 - 20, 300, 40), 2, border_radius=10)
-            draw_text_centered(screen, "JOYSTICK NO ENCONTRADO", font_info, YELLOW, 0)
-            draw_text_centered(screen, "Modo Teclado: Usa Flechas", font_info, WHITE, 40)
-            draw_text_centered(screen, "Presiona [ESPACIO] para Despegar", font_sub, WHITE, 80)
+            draw_text_centered(screen, "TECLADO DETECTADO", font_info, YELLOW, 0)
+            draw_text_centered(screen, "Espacio para Jugar", font_sub, WHITE, 40)
         
-        draw_text_centered(screen, "CONTROLES: Movimiento + [X] Disparar", font_info, (200, 200, 200), 140)
+        draw_text_centered(screen, "CONTROLES: Movimiento + Disparar", font_info, (200, 200, 200), 180)
 
-    # ==========================================
-    # ESTADO: JUEGO
-    # ==========================================
     elif game_state == "PLAYING" and not game_over:
-        # 1. INPUTS
-        rot, thrust, shoot = 0.0, 0.0, False
-        if joystick:
-            rot = joystick.get_axis(0)
-            thrust = -joystick.get_axis(1)
-            if joystick.get_numbuttons() > 0:
-                shoot = joystick.get_button(0) or (joystick.get_button(1) if joystick.get_numbuttons() > 1 else False)
-        else:
-            keys = pygame.key.get_pressed()
-            if keys[pygame.K_LEFT]:  rot = -1.0
-            if keys[pygame.K_RIGHT]: rot = 1.0
-            if keys[pygame.K_UP]:    thrust = 1.0
-            if keys[pygame.K_DOWN]:  thrust = -0.5
-            shoot = keys[pygame.K_x]
+        # --- LÓGICA DE CONTROL MEJORADA PARA AVIONES ---
+        rot, thrust = 0.0, 0.0
+        shoot = False
 
-        # 2. FÍSICA DEL JUGADOR
+        # 1. Control Pico (Analógico mejorado)
+        if pico_ctrl.connected:
+            # Eje X = Rotación (giro izquierda/derecha)
+            rot += pico_ctrl.x * 2.5  # Multiplicador para rotación más rápida
+            
+            # Eje Y = Aceleración/Desaceleración (invertido)
+            thrust += -pico_ctrl.y
+            
+            # Botón para disparar
+            if pico_ctrl.btn_pressed: 
+                shoot = True
+
+        # 2. Joystick USB
+        if joystick:
+            # Eje 0: Rotación (giro)
+            rot += joystick.get_axis(0) * 2.0
+            
+            # Eje 1: Aceleración/Desaceleración
+            thrust += -joystick.get_axis(1)
+            
+            if joystick.get_numbuttons() > 0:
+                if joystick.get_button(0): 
+                    shoot = True
+
+        # 3. Teclado (con mejor control)
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_LEFT]: rot -= 1.5
+        if keys[pygame.K_RIGHT]: rot += 1.5
+        if keys[pygame.K_UP]: thrust += 1.0
+        if keys[pygame.K_DOWN]: thrust -= 0.7
+        if keys[pygame.K_SPACE] or keys[pygame.K_x]: 
+            shoot = True
+        # Movimiento lateral opcional con A/D
+        if keys[pygame.K_a]: 
+            rad = math.radians(player['angle'] + 90)  # Lateral izquierdo
+            player['x'] += math.cos(rad) * 3.0
+            player['y'] += math.sin(rad) * 3.0
+        if keys[pygame.K_d]: 
+            rad = math.radians(player['angle'] - 90)  # Lateral derecho
+            player['x'] += math.cos(rad) * 3.0
+            player['y'] += math.sin(rad) * 3.0
+
+        # Suavizar controles (opcional)
+        rot = max(-1.0, min(1.0, rot * 0.9))
+        thrust = max(-1.0, min(1.0, thrust))
+
+        # Física Haskell
         player = ask_haskell(player, rot, thrust)
-        
-        # Estela de humo
-        if thrust > 0.1 and time_step % 3 == 0:
+        if thrust > 0.1 and time_step % 3 == 0: 
             create_smoke_trail(player['x'], player['y'], particles)
 
-        # 3. DISPARO DEL JUGADOR
+        # Disparo Jugador
         player_shoot_cooldown = max(0, player_shoot_cooldown - 1)
         if shoot and player_shoot_cooldown == 0:
-            angle_rad = math.radians(player['angle'])
-            bullet_speed = 12
+            rad = math.radians(player['angle'])
             bullets.append(Bullet(
-                x=player['x'] + math.cos(angle_rad) * 30,
-                y=player['y'] + math.sin(angle_rad) * 30,
-                vx=math.cos(angle_rad) * bullet_speed + player['speed'] * 0.5,
-                vy=math.sin(angle_rad) * bullet_speed,
-                owner="player"
+                player['x'] + math.cos(rad)*30, 
+                player['y'] + math.sin(rad)*30, 
+                math.cos(rad)*12 + player['speed']*0.5, 
+                math.sin(rad)*12, 
+                "player"
             ))
             player_shoot_cooldown = 15
-            if snd_shoot: snd_shoot.play()
+            if snd_shoot: 
+                snd_shoot.play()
 
-        # 4. IA Y ENEMIGOS
+        # IA Prolog + Física Enemigo
         for enemy in enemies:
-            if enemy['health'] <= 0:
+            if enemy['health'] <= 0: 
                 continue
-                
-            decision = ask_prolog(enemy['x'], enemy['y'], player['x'], player['y'], time_step)
-            enemy['action'] = decision.get('action', 'PATRULLAR')
-            enemy['msg'] = decision.get('message', '...')
-
-            if enemy['action'] == 'ATACAR':
-                if snd_alert and time_step % 120 == 0: 
-                    if snd_alert: snd_alert.play()
-
-            target_angle = math.atan2(player['y'] - enemy['y'], player['x'] - enemy['x'])
-            enemy['angle'] = math.degrees(target_angle)
+            dec = ask_prolog(enemy['x'], enemy['y'], player['x'], player['y'], time_step)
+            enemy['action'] = dec.get('action', 'PATRULLAR')
             
-            spd_mult = 4.5 if enemy['action'] == 'ATACAR' else 2.0
-            enemy['x'] += math.cos(target_angle) * spd_mult
-            enemy['y'] += math.sin(target_angle) * spd_mult
+            if enemy['action'] == 'ATACAR' and snd_alert and time_step % 120 == 0: 
+                snd_alert.play()
             
-            enemy['x'] = enemy['x'] % WIDTH
-            enemy['y'] = enemy['y'] % HEIGHT
-
+            tgt = math.atan2(player['y'] - enemy['y'], player['x'] - enemy['x'])
+            enemy['angle'] = math.degrees(tgt)
+            sp = 4.5 if enemy['action'] == 'ATACAR' else 2.0
+            enemy['x'] = (enemy['x'] + math.cos(tgt)*sp) % WIDTH
+            enemy['y'] = (enemy['y'] + math.sin(tgt)*sp) % HEIGHT
+            
             enemy['shoot_cooldown'] = max(0, enemy['shoot_cooldown'] - 1)
             if enemy['action'] == 'ATACAR' and enemy['shoot_cooldown'] == 0:
                 bullets.append(Bullet(
-                    x=enemy['x'],
-                    y=enemy['y'],
-                    vx=math.cos(target_angle) * 10,
-                    vy=math.sin(target_angle) * 10,
-                    owner="enemy"
+                    enemy['x'], enemy['y'], 
+                    math.cos(tgt)*10, 
+                    math.sin(tgt)*10, 
+                    "enemy"
                 ))
                 enemy['shoot_cooldown'] = random.randint(40, 60)
 
-        # 5. ACTUALIZAR BALAS Y COLISIONES
+        # Actualizar Balas
         bullets = [b for b in bullets if b.update()]
-        
-        for bullet in bullets[:]:
-            if bullet.owner == "player":
-                for enemy in enemies:
-                    if enemy['health'] > 0 and check_collision(bullet, enemy):
-                        enemy['health'] -= 20
-                        if bullet in bullets: bullets.remove(bullet)
-                        create_explosion(enemy['x'], enemy['y'], particles, intensity=15)
-                        screen_shake = 5
+        for b in bullets[:]:
+            hit = False
+            if b.owner == "player":
+                for e in enemies:
+                    if e['health'] > 0 and check_collision(b, e):
+                        e['health'] -= 20
+                        create_explosion(e['x'], e['y'], particles, 15)
                         score += 10
-                        if enemy['health'] <= 0:
-                            create_explosion(enemy['x'], enemy['y'], particles, intensity=40)
+                        
+                        if e['health'] <= 0:
+                            create_explosion(e['x'], e['y'], particles, 40)
                             score += 100
-                            if snd_alert: snd_alert.play()
+                            enemy_destroyed = True  # ¡Enemigo destruido!
+                            game_over_display_timer = 120  # 2 segundos de mensaje
+                            if snd_explosion:
+                                snd_explosion.play()
+                            if snd_victory:
+                                snd_victory.play()
+                        else:
+                            if snd_alert: 
+                                snd_alert.play()
+                        hit = True
                         break
-            else:
-                if check_collision(bullet, player):
-                    player['health'] -= 15
-                    if bullet in bullets: bullets.remove(bullet)
-                    create_explosion(player['x'], player['y'], particles, intensity=10)
-                    screen_shake = 8
+            elif check_collision(b, player):
+                player['health'] -= 15
+                create_explosion(player['x'], player['y'], particles, 10)
+                screen_shake = 8
+                
+                if player['health'] <= 0:
+                    create_explosion(player['x'], player['y'], particles, 40)
+                    player_destroyed = True  # ¡Jugador destruido!
+                    game_over_display_timer = 120  # 2 segundos de mensaje
+                    if snd_explosion:
+                        snd_explosion.play()
+                hit = True
+            
+            if hit: 
+                bullets.remove(b)
 
-        # 6. ACTUALIZAR PARTÍCULAS
+        # Actualizar Partículas
         particles = [p for p in particles if p.update()]
 
-        # 7. CONDICIONES DE VICTORIA/DERROTA
-        if player['health'] <= 0:
+        # Victoria/Derrota
+        if player['health'] <= 0: 
             game_over = True
             victory = False
-            if snd_engine: snd_engine.stop()
-        elif all(e['health'] <= 0 for e in enemies):
+            if snd_engine:
+                snd_engine.stop()
+        elif all(e['health'] <= 0 for e in enemies): 
             game_over = True
             victory = True
-            if snd_engine: snd_engine.stop()
+            if snd_engine:
+                snd_engine.stop()
 
-        # 8. RENDERIZADO
-        bg_y += 3 + (player['speed'] * 0.4)
-        if bg_y >= HEIGHT: bg_y = 0
-        
-        shake_x = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
-        shake_y = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
+        # Render
+        bg_y = (bg_y + 3 + player['speed']*0.4) % HEIGHT
+        sx = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
+        sy = random.randint(-screen_shake, screen_shake) if screen_shake > 0 else 0
         screen_shake = max(0, screen_shake - 1)
         
-        screen.blit(bg_image, (shake_x, bg_y + shake_y))
-        screen.blit(bg_image, (shake_x, bg_y - HEIGHT + shake_y))
+        screen.blit(bg_image, (sx, bg_y + sy))
+        screen.blit(bg_image, (sx, bg_y - HEIGHT + sy))
 
-        for p in particles:
+        for p in particles: 
             p.draw(screen)
-
-        for b in bullets:
+        for b in bullets: 
             b.draw(screen)
-
-        draw_sprite_rotated(screen, player_sprite, player['x'], player['y'], player['angle'])
-        for enemy in enemies:
-            if enemy['health'] > 0:
-                draw_sprite_rotated(screen, enemy_sprite, enemy['x'], enemy['y'], enemy['angle'])
-
-        hud_bar = pygame.Surface((WIDTH, 120), pygame.SRCALPHA)
-        hud_bar.fill((0, 0, 0, 180))
-        screen.blit(hud_bar, (0, HEIGHT-120))
-
-        draw_health_bar(screen, 20, HEIGHT - 110, 200, 20, player['health'], 
-                       player['max_health'], "TU AVIÓN")
         
-        alive_enemies = [e for e in enemies if e['health'] > 0]
-        if alive_enemies:
-            enemy = alive_enemies[0]
-            draw_health_bar(screen, WIDTH - 220, HEIGHT - 110, 200, 20, 
-                          enemy['health'], enemy['max_health'], "ENEMIGO")
-            col_ai = RED if enemy['action'] == 'ATACAR' else GREEN
-            screen.blit(font_hud.render(f"IA: {enemy['action']}", True, col_ai), 
-                       (WIDTH - 220, HEIGHT - 70))
+        draw_sprite_rotated(screen, player_sprite, player['x'], player['y'], player['angle'])
+        for e in enemies:
+            if e['health'] > 0: 
+                draw_sprite_rotated(screen, enemy_sprite, e['x'], e['y'], e['angle'])
 
-        screen.blit(font_sub.render(f"VELOCIDAD: {player['speed']:.1f} | ÁNGULO: {int(player['angle'])%360}°", 
-                                   True, GREEN), (20, 20))
+        # HUD
+        hud_h = 120
+        overlay = pygame.Surface((WIDTH, hud_h), pygame.SRCALPHA)
+        overlay.fill((0,0,0,180))
+        screen.blit(overlay, (0, HEIGHT-hud_h))
+        
+        draw_health_bar(screen, 20, HEIGHT-100, 200, 20, player['health'], 100, "TU AVIÓN")
+        alive = [e for e in enemies if e['health'] > 0]
+        if alive:
+            draw_health_bar(screen, WIDTH-220, HEIGHT-100, 200, 20, alive[0]['health'], 100, "ENEMIGO")
+        
+        draw_radar(screen, player, enemies, WIDTH-110, 10, 100)
         screen.blit(font_title.render(f"SCORE: {score}", True, YELLOW), (WIDTH//2 - 100, 20))
-
-        draw_radar(screen, player, enemies, WIDTH - 110, 10, 100)
+        
+        # Mostrar mensajes temporales de destrucción
+        if game_over_display_timer > 0:
+            game_over_display_timer -= 1
+            if enemy_destroyed:
+                # Mensaje de ENEMIGO DESTRUIDO
+                msg_surf = pygame.Surface((400, 60), pygame.SRCALPHA)
+                msg_surf.fill((0, 0, 0, 180))
+                pygame.draw.rect(msg_surf, GREEN, (0, 0, 400, 60), 3)
+                screen.blit(msg_surf, (WIDTH//2 - 200, HEIGHT//2 - 30))
+                
+                msg_text = font_big.render("¡ENEMIGO DESTRUIDO!", True, GREEN)
+                msg_rect = msg_text.get_rect(center=(WIDTH//2, HEIGHT//2))
+                screen.blit(msg_text, msg_rect)
+                
+                bonus_text = font_info.render(f"+100 PUNTOS!", True, YELLOW)
+                bonus_rect = bonus_text.get_rect(center=(WIDTH//2, HEIGHT//2 + 25))
+                screen.blit(bonus_text, bonus_rect)
+            
+            elif player_destroyed:
+                # Mensaje de JUGADOR DESTRUIDO
+                msg_surf = pygame.Surface((400, 60), pygame.SRCALPHA)
+                msg_surf.fill((0, 0, 0, 180))
+                pygame.draw.rect(msg_surf, RED, (0, 0, 400, 60), 3)
+                screen.blit(msg_surf, (WIDTH//2 - 200, HEIGHT//2 - 30))
+                
+                msg_text = font_big.render("¡AVIÓN DAÑADO!", True, RED)
+                msg_rect = msg_text.get_rect(center=(WIDTH//2, HEIGHT//2))
+                screen.blit(msg_text, msg_rect)
 
     elif game_state == "PLAYING" and game_over:
-        game_state = "GAME_OVER"
+        # Pantalla de GAME OVER definitiva
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 200))
+        screen.blit(overlay, (0, 0))
         
-    if game_state == "GAME_OVER":
+        # Mostrar fondo del juego detrás
+        bg_y = (bg_y + 2) % HEIGHT
+        screen.blit(bg_image, (0, bg_y))
+        screen.blit(bg_image, (0, bg_y - HEIGHT))
+        
+        # Dibujar partículas restantes
+        for p in particles: 
+            p.draw(screen)
+        
+        if victory:
+            # VICTORIA
+            draw_text_centered(screen, "¡VICTORIA!", font_title, GREEN, -80)
+            draw_text_centered(screen, f"SCORE FINAL: {score}", font_sub, YELLOW, -20)
+            draw_text_centered(screen, "¡ENEMIGO DESTRUIDO!", font_big, GOLD, 20)
+            
+            # Mostrar estrellas de victoria
+            for i in range(3):
+                star_size = 20 + i * 5
+                star_x = WIDTH//2 - 100 + i * 100
+                star_y = HEIGHT//2 + 70
+                pygame.draw.polygon(screen, GOLD, [
+                    (star_x, star_y - star_size),
+                    (star_x + star_size//3, star_y - star_size//3),
+                    (star_x + star_size, star_y),
+                    (star_x + star_size//3, star_y + star_size//3),
+                    (star_x, star_y + star_size),
+                    (star_x - star_size//3, star_y + star_size//3),
+                    (star_x - star_size, star_y),
+                    (star_x - star_size//3, star_y - star_size//3)
+                ])
+        else:
+            # DERROTA
+            draw_text_centered(screen, "GAME OVER", font_title, RED, -80)
+            draw_text_centered(screen, f"SCORE FINAL: {score}", font_sub, YELLOW, -20)
+            draw_text_centered(screen, "¡HAS SIDO DERRIBADO!", font_big, ORANGE, 20)
+            
+            # Mostrar cruz de derrota
+            cross_size = 40
+            cross_x = WIDTH//2
+            cross_y = HEIGHT//2 + 70
+            pygame.draw.line(screen, RED, (cross_x - cross_size, cross_y - cross_size), 
+                            (cross_x + cross_size, cross_y + cross_size), 5)
+            pygame.draw.line(screen, RED, (cross_x + cross_size, cross_y - cross_size), 
+                            (cross_x - cross_size, cross_y + cross_size), 5)
+        
+        # Instrucciones para continuar
+        blink_timer += 1
+        if (blink_timer // 30) % 2 == 0:
+            draw_text_centered(screen, "Presiona CUALQUIER TECLA o BOTÓN para continuar", font_info, WHITE, 100)
+
+    elif game_state == "GAME_OVER":
+        # Esta pantalla ya no se usa mucho, pero la mantenemos por compatibilidad
         overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
         overlay.fill(DARK_OVERLAY)
         screen.blit(overlay, (0,0))
-        
-        if victory:
-            draw_text_centered(screen, "¡VICTORIA!", font_title, GREEN, -100)
-            draw_text_centered(screen, "Has derrotado al enemigo", font_sub, WHITE, -40)
-        else:
-            draw_text_centered(screen, "DERRIBADO", font_title, RED, -100)
-            draw_text_centered(screen, "Tu avión fue destruido", font_sub, WHITE, -40)
-        
-        draw_text_centered(screen, f"PUNTUACIÓN FINAL: {score}", font_title, YELLOW, 20)
-        draw_text_centered(screen, "Presiona cualquier tecla para continuar", font_info, WHITE, 80)
+        txt, col = ("¡VICTORIA!", GREEN) if victory else ("DERRIBADO", RED)
+        draw_text_centered(screen, txt, font_title, col, -50)
+        draw_text_centered(screen, f"SCORE FINAL: {score}", font_sub, WHITE, 20)
+        draw_text_centered(screen, "Presiona CUALQUIER TECLA o BOTÓN para Reiniciar", font_info, WHITE, 60)
 
     pygame.display.flip()
 
-# Limpieza final
-if snd_engine: snd_engine.stop()
-pygame.mixer.quit()
+# Salida
+if snd_engine: 
+    snd_engine.stop()
+try: 
+    pygame.mixer.quit()
+except: 
+    pass
 proc_hs.terminate()
 proc_pl.terminate()
+if pico_ctrl.ser: 
+    pico_ctrl.ser.close()
 pygame.quit()
 sys.exit()
