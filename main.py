@@ -66,11 +66,11 @@ class PicoController:
                     self.ser = serial.Serial(p.device, 115200, timeout=0.01)
                     self.port_name = p.device
                     self.connected = True
-                    print(f"✅ Pico conectada en {self.port_name}")
+                    print(f"Pico conectada en {self.port_name}")
                     return
                 except:
                     pass
-        print("⚠️ Pico no encontrada (Usando modo Teclado).")
+        print("Pico no encontrada (Usando modo Teclado).")
 
     def update(self):
         # Resetear btn_pressed cada frame
@@ -306,7 +306,7 @@ def draw_radar(surface, player, enemies, x, y, size):
                 pygame.draw.circle(radar_surf, RED, (radar_x, radar_y), 3)
     surface.blit(radar_surf, (x, y))
 
-def ask_haskell(state, rot, thrust):
+def ask_haskell(state, rot, thrust): #Comunicación con Haskell
     try:
         input_str = f"{state['x']} {state['y']} {state['angle']} {state['speed']} {rot} {thrust}\n"
         proc_hs.stdin.write(input_str)
@@ -324,7 +324,7 @@ def ask_haskell(state, rot, thrust):
     except: 
         return state
 
-def ask_prolog(ex, ey, px, py, time_step):
+def ask_prolog(ex, ey, px, py, time_step): #Comunicación con Prolog
     try:
         proc_pl.stdin.write(f"[{ex}, {ey}, {px}, {py}, {time_step}].\n")
         proc_pl.stdin.flush()

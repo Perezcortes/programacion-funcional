@@ -94,7 +94,7 @@ normalizeAngle a
     | otherwise = a
 
 -- Wrap coordenadas (teletransporte en bordes)
-wrapCoordinate :: Float -> Float -> Float
+wrapCoordinate :: Float -> Float -> Float --Si sales por la derecha, apareces por la izquierda.
 wrapCoordinate val limit
     | val > limit = 0
     | val < 0 = limit
@@ -123,7 +123,7 @@ willCollideWithBounds config state steps =
 -- PARSEO SEGURO CON MANEJO DE ERRORES
 -- ====================================
 
-parseInput :: String -> Maybe (PlaneState, Input)
+parseInput :: String -> Maybe (PlaneState, Input) --Si Python le envía basura (ej: una letra en vez de un número), el programa podría romperse.
 parseInput line = do
     let tokens = words line
     when (length tokens /= 6) Nothing
@@ -162,11 +162,11 @@ main = do
 
 loop :: PhysicsConfig -> IO ()
 loop config = do
-    eof <- isEOF
+    eof <- isEOF --Verifica si Python cerró la conexión
     if eof 
         then hPutStrLn stderr "Physics Engine Terminated"
         else do
-            line <- getLine
+            line <- getLine --Lee la cadena "200.0 300.0 90.0 ..." desde Python.
             case parseInput line of
                 Just (state, input) -> do
                     let newState = updatePhysics config state input
